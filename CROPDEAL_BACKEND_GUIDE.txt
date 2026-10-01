@@ -1,0 +1,180 @@
+CropDeal Backend Guide
+======================
+
+Scope
+-----
+The current backend includes Eureka, Authentication, API Gateway, Profile,
+Crop, Order, Payment, Notification, and Config Server.
+OAuth2 is configuration-ready but JWT remains the active login mechanism.
+
+Service Ports
+-------------
+Eureka Server:       8761
+authentication:      8081
+crop-service:        8082
+api-gateway:         8080
+profile-service:     8085
+order-service:       8087
+payment-service:     8088
+notification-service:8089
+config-server:       8888
+
+Required Infrastructure
+------------------------
+1. MySQL databases:
+   cropdeal_auth, cropdeal_crop_db, cropdeal_profile,
+   cropdeal_order, cropdeal_payment, cropdeal_notification.
+2. RabbitMQ on localhost:5672.
+3. Razorpay test credentials for payment creation:
+   RAZORPAY_KEY_ID
+   RAZORPAY_KEY_SECRET
+   RAZORPAY_WEBHOOK_SECRET
+4. A strong BANK_DETAILS_KEY for encrypted bank data.
+5. SMTP variables if email notifications are wanted:
+   NOTIFICATION_EMAIL_ENABLED=true
+   NOTIFICATION_EMAIL_FROM
+   MAIL_HOST
+   MAIL_PORT
+   MAIL_USERNAME
+   MAIL_PASSWORD
+
+Startup Order
+-------------
+1. Start MySQL and RabbitMQ.
+2. Start config-server.
+3. Start eureka-server.
+4. Start authentication-service.
+5. Start crop-service.
+6. Start profile-service.
+7. Start order-service, payment-service, and notification-service.
+8. Start api-gateway last.
+
+Use the gateway at http://localhost:8080 for client requests.
+
+Authentication Flow
+-------------------
+1. Register:
+   POST /auth/register
+   Body: {"email":"dealer@example.com","password":"secret123","role":"DEALER"}
+2. Login:
+   POST /auth/login
+   Body: {"email":"dealer@example.com","password":"secret123"}
+3. Save the returned JWT.
+4. Send it on protected requests:
+   Authorization: Bearer <JWT>
+5. Add another role for the same account:
+   POST /auth/roles?role=FARMER
+   Header: Authorization: Bearer <JWT>
+6. Login again after role changes to receive a JWT containing both roles.
+
+Profile Flow
+------------
+Farmer profile:
+   POST /farmers
+   GET  /farmers/{id}
+   PUT  /farmers/{id}
+   DELETE /farmers/{id}
+
+Dealer profile:
+   POST /dealers
+   GET  /dealers/{id}
+   PUT  /dealers/{id}
+   DELETE /dealers/{id}
+
+Bank Account Flow
+-----------------
+Bank accounts are owned by the authenticated user in Payment Service.
+They are not duplicated in Profile Service.
+
+   GET    /bank-accounts
+   POST   /bank-accounts
+   PUT    /bank-accounts/{id}
+   DELETE /bank-accounts/{id}
+
+Account number and IFSC are encrypted in the database and masked in responses.
+One account can be shared by both Farmer and Dealer roles. A user may also
+create multiple accounts and select one as default.
+
+Crop and Order Flow
+-------------------
+1. A Farmer creates a crop:
+   POST /crops
+2. A Dealer lists crops:
+   GET /crops
+3. Dealer creates an order:
+   POST /orders
+   Body: {"cropId":1,"farmerId":10,"quantity":5}
+4. Order Service asks Crop Service to reserve quantity atomically.
+5. Crop price is read by Order Service; the client does not set the price.
+6. Order Service saves the order and publishes OrderCreatedEvent.
+7. Payment Service consumes the event and creates a Razorpay order.
+8. The client reads the Payment record and opens Razorpay Checkout.
+
+Payment Flow
+------------
+1. Automatic payment creation happens after OrderCreatedEvent.
+2. Payment can also be created directly:
+   POST /payments
+   Body: {"orderId":1,"amount":2500.00}
+3. Verify the Razorpay checkout result:
+   POST /payments/verify
+   Body: {"razorpayOrderId":"order_x","razorpayPaymentId":"pay_x","razorpaySignature":"..."}
+4. Razorpay webhook:
+   POST /payments/webhook
+   Header: X-Razorpay-Signature: <signature>
+5. Successful payment publishes PaymentStatusChangedEvent.
+6. Order Service changes the order to CONFIRMED.
+7. Failed payment changes the order to CANCELLED.
+
+Payout Flow
+-----------
+1. A verified farmer bank account must contain a Razorpay linked account ID.
+2. An Admin creates a payout record:
+   POST /payouts
+   Body: {"orderId":1,"farmerId":10,"farmerEmail":"farmer@example.com","bankAccountId":1,"grossAmount":2500.00,"commissionAmount":250.00}
+3. Admin executes the payout:
+   POST /payouts/{id}/execute
+4. Payment Service calls Razorpay Transfers with the linked account ID.
+5. Payout moves to PROCESSING. Final transfer webhook/status handling should mark PAID.
+6. Farmer can view payout history:
+   GET /payouts/farmer/me
+
+Notification Flow
+-----------------
+1. Order and payment events are published to RabbitMQ.
+2. Notification Service consumes them and stores notifications.
+3. Authenticated user reads notifications:
+   GET /notifications
+4. Mark one as read:
+   PUT /notifications/{id}/read
+5. If SMTP is enabled, the service also sends an email to the event recipient.
+
+Config Server and OAuth2
+------------------------
+Config Server is available at:
+   http://localhost:8888
+
+Examples:
+   GET /payment-service/default
+   GET /notification-service/default
+
+Order, Payment, and Notification Services use:
+   spring.config.import=optional:configserver:http://localhost:8888
+
+JWT remains the active authentication mechanism. OAuth2 provider placeholders
+are in Config Server. Add provider credentials only when enabling OAuth2 login.
+
+Important Security Notes
+------------------------
+- Never commit Razorpay, SMTP, JWT, or encryption secrets.
+- Use test-mode Razorpay keys during development.
+- Do not store card numbers, CVV, PINs, or passwords.
+- Payout execution requires a verified Razorpay linked account.
+- Focused unit tests currently cover Authentication Service and Profile Service.
+- Full API and end-to-end verification remain pending for a later session.
+
+Current Pause Point
+-------------------
+The backend implementation is paused after consolidating Farmer and Dealer into
+Profile Service. The next work should be full integration testing, not more
+feature development, unless a failing API identifies a required fix.

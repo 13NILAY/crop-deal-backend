@@ -1,0 +1,37 @@
+package com.cropdeal.order.config;
+
+import jakarta.servlet.*;
+import jakarta.servlet.http.*;
+import java.io.IOException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+@Component
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
+    private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
+    private final JwtService jwtService;
+    public JwtAuthenticationFilter(JwtService jwtService) { this.jwtService = jwtService; }
+    @Override protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
+                                               FilterChain chain) throws ServletException, IOException {
+        String header = request.getHeader("Authorization");
+        if (header != null && header.startsWith("Bearer ")) {
+            try {
+                var claims = jwtService.parse(header.substring(7));
+                String roles = claims.get("roles", String.class);
+                var authorities = roles == null ? java.util.List.<SimpleGrantedAuthority>of()
+                    : java.util.Arrays.stream(roles.split(",")).map(String::trim).map(role -> new SimpleGrantedAuthority("ROLE_" + role)).toList();
+                SecurityContextHolder.getContext().setAuthentication(
+                        new UsernamePasswordAuthenticationToken(claims.getSubject(), null, authorities));
+            } catch (RuntimeException ex) {
+                log.warn("Rejected JWT for {}: {}", request.getRequestURI(), ex.getMessage());
+                SecurityContextHolder.clearContext();
+            }
+        }
+        chain.doFilter(request, response);
+    }
+}

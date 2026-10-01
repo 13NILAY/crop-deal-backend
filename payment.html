@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Razorpay Test</title>
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+</head>
+<body>
+
+<button onclick="pay()">Pay Now</button>
+<pre id="result"></pre>
+
+<script>
+function pay() {
+    if (typeof Razorpay === "undefined") {
+        alert("Razorpay Checkout did not load. Open this page through http://localhost, not file://.");
+        return;
+    }
+
+    const dealerToken = prompt("Paste a fresh dealer JWT:");
+    if (!dealerToken) return;
+
+    const options = {
+        key: "rzp_test_TcCyjE29oM86i0",
+        amount: 16000,
+        currency: "INR",
+        name: "CropDeal",
+        order_id: "order_ThkskKooq4kDOg",
+
+        handler: async function(response) {
+
+            const res = await fetch("http://localhost:8088/payments/verify", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer " + dealerToken.trim()
+                },
+                body: JSON.stringify({
+                    razorpayOrderId: response.razorpay_order_id,
+                    razorpayPaymentId: response.razorpay_payment_id,
+                    razorpaySignature: response.razorpay_signature
+                })
+            });
+
+            const body = await res.text();
+            document.getElementById("result").textContent = res.status + "\n" + body;
+            if (!res.ok) console.error("Payment verification failed:", res.status, body);
+        }
+    };
+
+    const rzp = new Razorpay(options);
+    rzp.open();
+}
+</script>
+
+</body>
+</html>
